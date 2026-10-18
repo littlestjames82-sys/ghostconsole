@@ -23,6 +23,24 @@ per board state:
 PYTHONPATH=../src python3 -m ghostconsole build --root fixture_reports -o board.html
 ```
 
+What to check when the board opens:
+
+| Project | Expected column | Why |
+| --- | --- | --- |
+| `verified-proj` | Verified | Every present report is ok and fresh. |
+| `attention-proj` | Attention | Verify verdict `gaps_found`, plus pending Approve requests. |
+| `stale-proj` | Stale | Watch verdict is `stale`. |
+| `empty-proj` | Stale | No reports at all; every row says "no report found". |
+
+Note the fixture reports in this folder are *inputs* to the demo, not
+live project state: when GhostConsole scans a real project that
+happens to ship fixtures like these under `examples/` or `tests/`,
+those rows are labelled "(fixture/example report)" and never place
+the project. This demo points `--root` directly at the fixture set,
+so each fixture folder is itself treated as a project.
+
 The board is one self-contained HTML file: inline CSS, no JavaScript,
 no external references. It works offline, forever, and can be archived
-as evidence of report state at a point in time.
+as evidence of report state at a point in time. To see the same model
+without a browser, run
+`PYTHONPATH=../src python3 -m ghostconsole summary --root fixture_reports`.

@@ -144,7 +144,16 @@ def pick_report(root: Path, filename: str, shape,
             if corrupt_path is None:
                 corrupt_path, corrupt_err = cand, err
             continue
-        if isinstance(obj, dict) and shape(obj):
+        if not isinstance(obj, dict):
+            # Valid JSON but not a report object (a list, a number,
+            # null): for these Ghost-specific file names that is a
+            # corrupt report, not an absent one. Record it so the
+            # caller can show an unreadable row instead of dropping
+            # the file silently.
+            if corrupt_path is None:
+                corrupt_path, corrupt_err = cand, "not a JSON object"
+            continue
+        if shape(obj):
             return cand, obj, None, None
     return None, None, corrupt_path, corrupt_err
 
@@ -170,6 +179,10 @@ def pick_report_two_pass(root: Path, filename: str, shape) -> tuple:
 def parse_time(value) -> datetime | None:
     """Best-effort timestamp: ISO strings and epoch numbers."""
     if value is None:
+        return None
+    if isinstance(value, bool):
+        # JSON true/false is not an epoch; int(True) == 1 would
+        # otherwise become a 1970 "reported" time.
         return None
     if isinstance(value, (int, float)) and value > 0:
         try:
@@ -203,11 +216,122 @@ def _when(path: Path, embedded) -> tuple[datetime, str]:
     return _mtime(path), "mtime"
 
 
+def _is_int(value) -> bool:
+    """True for real JSON integers. bool is an int subclass in
+    Python, but a report field carrying true/false is not a count."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _fmt_int(value) -> str:
+    if isinstance(value, bool):
+        return "?"
     try:
         return f"{int(value):,}"
     except (TypeError, ValueError):
         return "?"
+
+
+def _int_or_none(value) -> int | None:
+    """An int field exactly as written, or None. Bools are not counts
+    and floats/strings are not guessed at."""
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _history_rows(project: Path, filename: str) -> list:
+    """Readable rows of a project's history file, for trend context.
+
+    Best-effort only: a missing or unreadable history yields no trend.
+    The history's own adapter branch still reports an unreadable
+    history as UNREADABLE when that history is the row's evidence;
+    this helper is used when another report is the row's evidence, or
+    alongside rows the caller already read.
+    """
+    path = project / filename
+    if not path.is_file():
+        return []
+    rows, _bad, err = _read_jsonl(path)
+    return rows if err is None else []
+
+
+# ------------------------------------------------------- history trends
+# A trend summarizes a tool's recorded history (2+ readable entries):
+# how many entries, and how the latest compares with the previous
+# one. Trends are context on the row, never a verdict: they are built
+# only from fields each adapter already recognizes, and the
+# classifier never sees them, so history can neither promote a
+# project with a recovered latest report nor demote one whose older
+# entries were worse.
+
+def _slice_trend(rows: list) -> str:
+    if len(rows) < 2:
+        return ""
+    parts = [f"{len(rows)} entries recorded in history"]
+    saved = []
+    for row in rows:
+        value = _int_or_none(row.get("saved_tokens"))
+        if value is None:
+            before = _int_or_none(row.get("before_tokens"))
+            after = _int_or_none(row.get("after_tokens"))
+            if before is not None and after is not None:
+                value = before - after
+        saved.append(value)
+    latest, previous = saved[-1], saved[-2]
+    if latest is not None and previous is not None:
+        if latest > previous:
+            change = f"up {_fmt_int(latest - previous)}"
+        elif latest < previous:
+            change = f"down {_fmt_int(previous - latest)}"
+        else:
+            change = "unchanged"
+        parts.append(f"tokens saved {_fmt_int(previous)} -> "
+                     f"{_fmt_int(latest)} ({change})")
+    return "; ".join(parts)
+
+
+def _verify_trend(rows: list) -> str:
+    if len(rows) < 2:
+        return ""
+    attention = sum(1 for row in rows
+                    if _verdict_state(row.get("verdict")) == ATTENTION)
+    parts = [f"{len(rows)} verdicts recorded in history",
+             f"{attention} needed attention"]
+    latest, previous = rows[-1].get("verdict"), rows[-2].get("verdict")
+    if isinstance(latest, str) and isinstance(previous, str) and latest:
+        if latest == previous:
+            parts.append(f"verdict unchanged from previous ({latest})")
+        else:
+            parts.append(f"verdict changed: {previous} -> {latest}")
+    return "; ".join(parts)
+
+
+def _bench_failed_count(row: dict) -> int | None:
+    """Failing-task count on one Bench history line, or None.
+
+    Bench's history writer records "tasks_failed"; "failed" is also
+    honoured. Reading only "failed" used to make a history-only
+    project with failing runs read as ok. A boolean or negative
+    value is not a count (harden lane): it is skipped, falling
+    through to the other key, and yields None if neither counts.
+    """
+    for key in ("tasks_failed", "failed"):
+        value = _int_or_none(row.get(key))
+        if value is not None and value >= 0:
+            return value
+    return None
+
+
+def _bench_trend(rows: list) -> str:
+    if len(rows) < 2:
+        return ""
+    parts = [f"{len(rows)} runs recorded in history"]
+    counts = [_bench_failed_count(row) for row in rows]
+    latest, previous = counts[-1], counts[-2]
+    if latest is not None and previous is not None:
+        parts.append(f"failing tasks {_fmt_int(previous)} -> "
+                     f"{_fmt_int(latest)}")
+    return "; ".join(parts)
 
 
 def _rel(path: Path, project: Path) -> str:
@@ -263,6 +387,7 @@ def _tag(section: Section, provenance: str) -> Section:
 # ---------------------------------------------------------------- Slice
 
 def slice_section(project: Path) -> Section:
+    """GhostSlice row: latest history line, else newest bundle manifest."""
     tool = "GhostSlice"
     history = project / ".ghostslice-history.jsonl"
     if history.is_file():
@@ -289,7 +414,10 @@ def slice_section(project: Path) -> Section:
             summary = f"latest history line: {last.get('kind', 'run')}"
         if bad:
             summary += f"; {bad} unreadable line(s) skipped"
-        return Section(tool, OK, summary, _rel(history, project), when, kind)
+        section = Section(tool, OK, summary, _rel(history, project),
+                          when, kind)
+        section.trend = _slice_trend(rows)
+        return section
 
     def _is_slice_manifest(p: Path) -> bool:
         obj, err = _read_json(p)
@@ -371,6 +499,7 @@ def _bench_status_state(status) -> str | None:
 
 
 def verify_section(project: Path) -> Section:
+    """GhostVerify row: newest verify report, else latest history verdict."""
     tool = "GhostVerify"
 
     report, obj, corrupt, corrupt_err, prov = pick_report_two_pass(
@@ -402,8 +531,11 @@ def verify_section(project: Path) -> Section:
                     _verdict_state(post.get("verdict")) == ATTENTION:
                 reason = f"Verify patch verdict: {post.get('verdict')}"
         when, kind = _when(report, obj.get("generated_at") or obj.get("at"))
-        return _tag(Section(tool, state, summary, _rel(report, project),
-                            when, kind, reason), prov)
+        section = _tag(Section(tool, state, summary, _rel(report, project),
+                               when, kind, reason), prov)
+        section.trend = _verify_trend(
+            _history_rows(project, ".ghostverify-history.jsonl"))
+        return section
 
     history = project / ".ghostverify-history.jsonl"
     if history.is_file():
@@ -412,11 +544,21 @@ def verify_section(project: Path) -> Section:
             return Section(tool, UNREADABLE, f"history unreadable ({err})",
                            _rel(history, project),
                            reason="Verify history unreadable")
+        if not rows:
+            # Same rule as Slice: a present history with no readable
+            # records is unreadable evidence, never an absent row.
+            return Section(tool, UNREADABLE,
+                           "history file present but has no readable lines",
+                           _rel(history, project),
+                           reason="history present but empty of records")
         if rows:
             last = rows[-1]
             verdict = last.get("verdict")
-            state = _verdict_state(verdict) or OK
+            state = _verdict_state(verdict)
             summary = f"latest verdict: {verdict}"
+            if state is None:
+                state = OK
+                summary += " (verdict wording not recognized)"
             patch = last.get("patch_result")
             if patch:
                 summary += f"; patch: {patch}"
@@ -425,14 +567,17 @@ def verify_section(project: Path) -> Section:
             when, kind = _when(history, last.get("at"))
             reason = (f"Verify verdict: {verdict}"
                       if state == ATTENTION else "")
-            return Section(tool, state, summary, _rel(history, project),
-                           when, kind, reason)
+            section = Section(tool, state, summary, _rel(history, project),
+                              when, kind, reason)
+            section.trend = _verify_trend(rows)
+            return section
     return Section(tool)
 
 
 # ---------------------------------------------------------------- Bench
 
 def bench_section(project: Path) -> Section:
+    """GhostBench row: newest bench report, else latest history run."""
     tool = "GhostBench"
 
     report, obj, corrupt, corrupt_err, prov = pick_report_two_pass(
@@ -451,11 +596,15 @@ def bench_section(project: Path) -> Section:
         summary = f"run {run}: {len(tasks)} task(s)"
         if failed:
             summary += f", {failed} failed"
-        when, kind = _when(report, obj.get("generated_at") or obj.get("at"))
+        when, kind = _when(report, obj.get("generated_at")
+                           or obj.get("created_utc") or obj.get("at"))
         state = ATTENTION if failed else OK
         reason = f"Bench run {run}: {failed} failing task(s)" if failed else ""
-        return _tag(Section(tool, state, summary, _rel(report, project),
-                            when, kind, reason), prov)
+        section = _tag(Section(tool, state, summary, _rel(report, project),
+                               when, kind, reason), prov)
+        section.trend = _bench_trend(
+            _history_rows(project, ".ghostbench-history.jsonl"))
+        return section
 
     history = project / ".ghostbench-history.jsonl"
     if history.is_file():
@@ -464,24 +613,32 @@ def bench_section(project: Path) -> Section:
             return Section(tool, UNREADABLE, f"history unreadable ({err})",
                            _rel(history, project),
                            reason="Bench history unreadable")
+        if not rows:
+            return Section(tool, UNREADABLE,
+                           "history file present but has no readable lines",
+                           _rel(history, project),
+                           reason="history present but empty of records")
         if rows:
             last = rows[-1]
             when, kind = _when(history, last.get("at"))
-            failed = last.get("failed")
+            failed = _bench_failed_count(last)
             state = ATTENTION if failed else OK
             summary = f"latest run: {last.get('run_id', 'recorded')}"
             if failed:
                 summary += f", {_fmt_int(failed)} failed"
             reason = ("Bench history records failing tasks"
                       if failed else "")
-            return Section(tool, state, summary, _rel(history, project),
-                           when, kind, reason)
+            section = Section(tool, state, summary, _rel(history, project),
+                              when, kind, reason)
+            section.trend = _bench_trend(rows)
+            return section
     return Section(tool)
 
 
 # ---------------------------------------------------------------- Scope
 
 def scope_section(project: Path) -> Section:
+    """GhostScope row: newest scope pack found under the project."""
     tool = "GhostScope"
     pack = find_newest(project, "scope.json", provenance="live")
     prov = "live"
@@ -503,7 +660,7 @@ def scope_section(project: Path) -> Section:
         if isinstance(value, list):
             counts.append(f"{len(value)} {key.replace('_', ' ')}")
             break
-        if isinstance(value, int):
+        if _is_int(value):
             counts.append(f"{value} {key.replace('_', ' ')}")
             break
     risk = obj.get("max_risk", obj.get("risk"))
@@ -521,12 +678,13 @@ def scope_section(project: Path) -> Section:
 def _loop_count(value) -> int:
     if isinstance(value, list):
         return len(value)
-    if isinstance(value, int):
+    if _is_int(value):
         return value
     return 0
 
 
 def ledger_section(project: Path) -> Section:
+    """GhostLedger row: ledger-report.json, else the raw ledger file."""
     tool = "GhostLedger"
     report = project / "ledger-report.json"
     if report.is_file():
@@ -543,6 +701,10 @@ def ledger_section(project: Path) -> Section:
             loops = _loop_count(totals.get("loop_warnings"))
         entries = totals.get("entries", obj.get("entries"))
         cost = totals.get("cost_estimate_usd", obj.get("cost_estimate_usd"))
+        if cost is None:
+            # GhostLedger's report writer (and its shipped fixtures)
+            # name the estimate "estimated_cost" inside totals.
+            cost = totals.get("estimated_cost", obj.get("estimated_cost"))
         parts = []
         if entries is not None:
             parts.append(f"{_fmt_int(entries)} entries")
@@ -565,6 +727,14 @@ def ledger_section(project: Path) -> Section:
             return Section(tool, UNREADABLE, f"ledger unreadable ({err})",
                            _rel(ledger, project),
                            reason="Ledger file unreadable")
+        if not rows:
+            # An empty/corrupt-only ledger file is not evidence that
+            # everything is ok: without this, a project whose only
+            # report is an empty ledger file landed in Verified.
+            return Section(tool, UNREADABLE,
+                           "ledger file present but has no readable lines",
+                           _rel(ledger, project),
+                           reason="ledger present but empty of records")
         loops = sum(1 for r in rows if r.get("loop_warning"))
         summary = f"{len(rows)} entries (no ledger-report.json)"
         if loops:
@@ -580,6 +750,7 @@ def ledger_section(project: Path) -> Section:
 # ---------------------------------------------------------------- Watch
 
 def watch_section(project: Path) -> Section:
+    """GhostWatch row: newest watch report and its freshness verdict."""
     tool = "GhostWatch"
 
     report, obj, corrupt, corrupt_err, prov = pick_report_two_pass(
@@ -591,12 +762,21 @@ def watch_section(project: Path) -> Section:
                             reason="Watch report unreadable"), prov)
     if report is None:
         return Section(tool)
-    verdict = str(obj.get("verdict", "unknown")).lower()
+    verdict = str(obj.get("verdict", "unknown")).strip().lower()
     findings = obj.get("findings")
     extra = ""
     if isinstance(findings, list) and findings:
         extra = f", {len(findings)} finding(s)"
-    when, kind = _when(report, obj.get("generated_at") or obj.get("at"))
+    elif isinstance(findings, dict):
+        # GhostWatch's writer ships findings as a dict of lists
+        # ({"missing_bundle_file": [...], "stale_symbols": [...]}).
+        found = sum(len(v) for v in findings.values()
+                    if isinstance(v, list))
+        if found:
+            extra = f", {found} finding(s)"
+    # GhostWatch's report carries its run time as "checked_at".
+    when, kind = _when(report, obj.get("generated_at")
+                       or obj.get("checked_at") or obj.get("at"))
     if verdict == "fresh":
         return _tag(Section(tool, OK, f"verdict: fresh{extra}",
                             _rel(report, project), when, kind), prov)
@@ -761,6 +941,7 @@ def _fixture_store_note(section: Section, fixture_stores: int) -> Section:
 
 
 def approve_section(project: Path) -> Section:
+    """GhostApprove row: root store first, else nested store(s)."""
     nested_live: list = []
     nested_fixture: list = []
     for cand in _find_store_dirs(project):
@@ -791,6 +972,7 @@ def approve_section(project: Path) -> Section:
 
 
 def project_store_section(store: Path) -> Section:
+    """GhostApprove row for a shared store passed with --approve-store."""
     """Section for a shared store passed with --approve-store."""
     if store.is_dir():
         return _approve_store_section(store, store)
@@ -810,6 +992,7 @@ def _is_handoff_pack(obj) -> bool:
 
 
 def handoff_section(project: Path) -> Section:
+    """GhostHandoff row: newest handoff pack (a snapshot, not a verdict)."""
     tool = "GhostHandoff"
     report, obj, corrupt, corrupt_err, prov = pick_report_two_pass(
         project, "handoff.json", _is_handoff_pack)
@@ -835,7 +1018,7 @@ def handoff_section(project: Path) -> Section:
         dirty = 0
         for key in ("staged", "unstaged", "untracked"):
             value = status.get(f"{key}_count", status.get(key))
-            if isinstance(value, int):
+            if _is_int(value):
                 dirty += value
             elif isinstance(value, list):
                 dirty += len(value)
@@ -882,6 +1065,11 @@ def _pick_pack_manifest(project: Path, shape, companion: str) -> tuple:
                         (cand.parent / companion).is_file():
                     corrupt_path, corrupt_err = cand, err
                 continue
+            if not isinstance(obj, dict):
+                if corrupt_path is None and \
+                        (cand.parent / companion).is_file():
+                    corrupt_path, corrupt_err = cand, "not a JSON object"
+                continue
             if shape(obj):
                 return cand, obj, None, None, prov
         if corrupt_path is not None:
@@ -902,6 +1090,7 @@ def _is_logs_manifest(obj) -> bool:
 
 
 def logs_section(project: Path) -> Section:
+    """GhostLogs row: incident pack claimed by manifest shape + INCIDENT.md."""
     tool = "GhostLogs"
     report, obj, corrupt, corrupt_err, prov = _pick_pack_manifest(
         project, _is_logs_manifest, "INCIDENT.md")
@@ -965,6 +1154,7 @@ def _is_deps_manifest(obj) -> bool:
 
 
 def deps_section(project: Path) -> Section:
+    """GhostDeps row: newest deps manifest; undeclared imports are Attention."""
     tool = "GhostDeps"
     report, obj, corrupt, corrupt_err, prov = pick_report_two_pass(
         project, "deps-manifest.json", _is_deps_manifest)
@@ -993,15 +1183,16 @@ def deps_section(project: Path) -> Section:
     summary += f", {_fmt_int(not_declared)} imported not declared"
     pins = counts.get("pins_recorded")
     transitive = counts.get("pins_transitive_recorded")
-    if isinstance(pins, int) or isinstance(transitive, int):
-        summary += (f"; {_fmt_int((pins or 0) + (transitive or 0))} "
-                    f"pin(s) recorded")
+    if _is_int(pins) or _is_int(transitive):
+        pin_total = (pins if _is_int(pins) else 0) + \
+            (transitive if _is_int(transitive) else 0)
+        summary += f"; {_fmt_int(pin_total)} pin(s) recorded"
     state, reason = OK, ""
     # GhostDeps' own notes call declared-not-imported "a lead for a
     # human, not a verdict", so it is stated but never drives the
     # column. Code importing a package no manifest declares is the
     # factual gap (the Ledger loop-warning analogue) and does.
-    if isinstance(not_declared, int) and not_declared > 0:
+    if _is_int(not_declared) and not_declared > 0:
         state = ATTENTION
         reason = (f"Deps: {not_declared} imported package(s) "
                   f"not declared")
@@ -1023,6 +1214,7 @@ def _is_data_manifest(obj) -> bool:
 
 
 def data_section(project: Path) -> Section:
+    """GhostData row: data pack claimed by manifest shape + PROMPT.md."""
     tool = "GhostData"
     report, obj, corrupt, corrupt_err, prov = _pick_pack_manifest(
         project, _is_data_manifest, "PROMPT.md")
@@ -1058,7 +1250,7 @@ def data_section(project: Path) -> Section:
     if redaction.get("enabled") is False:
         summary += "; redaction disabled for this pack"
     state, reason = OK, ""
-    if isinstance(malformed, int) and malformed > 0:
+    if _is_int(malformed) and malformed > 0:
         state = ATTENTION
         reason = f"Data pack: {malformed} malformed row(s) in the source"
     when, kind = _when(report, obj.get("generated_at"))

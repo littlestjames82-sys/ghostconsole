@@ -34,6 +34,12 @@ ADAPTERS = (
 
 
 def collect_project(path: Path) -> ProjectBoard:
+    """Run every adapter over one project (no classification yet).
+
+    A path that is not a directory still returns a board: a single
+    unreadable section, so the problem is shown on the board instead
+    of raising or being dropped.
+    """
     project = Path(path)
     board = ProjectBoard(name=project.name or str(project),
                          path=str(project))
@@ -57,6 +63,13 @@ def collect_project(path: Path) -> ProjectBoard:
 
 def classify(board: ProjectBoard, now: datetime,
              stale_days: int) -> ProjectBoard:
+    """Place a board in exactly one column and record the reason.
+
+    Precedence: any live attention/unreadable section wins, then any
+    live stale section, then age staleness of the newest live
+    evidence, otherwise Verified. The chosen ``column_reason`` is
+    always set, so every card can print why it sits where it sits.
+    """
     # Only live sections place a project. Fixture/example sections are
     # evidence about the project's shipped test material, not about
     # the project, so they never drive a column in either direction.
@@ -101,6 +114,14 @@ def classify(board: ProjectBoard, now: datetime,
 def collect(projects: list[Path], stale_days: int = 7,
             approve_store: Path | None = None,
             now: datetime | None = None) -> dict:
+    """Collect and classify every project into the shared board model.
+
+    The returned dict carries ``generated_at``, ``stale_days``, the
+    JSON-ready ``projects`` list, and the ``boards`` objects the HTML
+    and text renderers consume. ``approve_store``, when given, adds
+    one extra board for that shared GhostApprove store. ``now`` is
+    injectable for tests; it defaults to the current UTC time.
+    """
     now = now or datetime.now(timezone.utc)
     boards = [classify(collect_project(p), now, stale_days)
               for p in projects]

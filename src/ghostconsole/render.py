@@ -52,10 +52,13 @@ header p, footer p { color: #aaa; }
 
 
 def esc(value) -> str:
+    """HTML-escape any value for the board (quotes included)."""
     return html.escape(str(value), quote=True)
 
 
 def age_text(when: datetime | None, now: datetime) -> str:
+    """Short relative age such as ``"5m ago"``; ``""`` when unknown."""
+
     if when is None:
         return ""
     delta = now - when
@@ -70,6 +73,7 @@ def age_text(when: datetime | None, now: datetime) -> str:
 
 
 def render_html(model: dict) -> str:
+    """Render the model as one self-contained, script-free HTML file."""
     boards: list[ProjectBoard] = model["boards"]
     now = datetime.fromisoformat(model["generated_at"])
     by_column = {c: [b for b in boards if b.column == c] for c in COLUMNS}
@@ -114,12 +118,16 @@ def render_html(model: dict) -> str:
                 if section.source:
                     meta_bits.append(section.source)
                 meta = " · ".join(meta_bits)
+                trend = (f' <span class="meta">trend: '
+                         f"{esc(section.trend)}</span>"
+                         if section.trend else "")
                 parts.append(
                     f'<li><span class="chip {esc(section.state)}">'
                     f"{esc(label)}</span><strong>{esc(section.tool)}"
                     f"</strong>: {esc(section.summary)}"
                     + (f' <span class="meta">{esc(meta)}</span>'
                        if meta else "")
+                    + trend
                     + "</li>")
             parts.append("</ul>")
             parts.append("</article>")
@@ -140,6 +148,7 @@ def render_html(model: dict) -> str:
 
 
 def render_text(model: dict) -> str:
+    """Render the model as a plain-text summary, grouped by column."""
     boards: list[ProjectBoard] = model["boards"]
     now = datetime.fromisoformat(model["generated_at"])
     lines = [
@@ -157,12 +166,15 @@ def render_text(model: dict) -> str:
                 label = STATE_LABELS.get(section.state, section.state)
                 age = age_text(section.when, now)
                 age = f" ({age})" if age else ""
+                trend = f" | trend: {section.trend}" if section.trend \
+                    else ""
                 lines.append(f"    [{label}] {section.tool}: "
-                             f"{section.summary}{age}")
+                             f"{section.summary}{age}{trend}")
     return "\n".join(lines) + "\n"
 
 
 def render_json(model: dict) -> str:
+    """Render the model as indented JSON (projects, not board objects)."""
     payload = {
         "generated_at": model["generated_at"],
         "stale_days": model["stale_days"],

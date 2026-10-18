@@ -16,14 +16,41 @@ board: three columns (Verified, Attention, Stale), one card per
 project, one row per tool. It runs nothing, changes nothing, and
 phones nowhere. It is a viewer, not a tool in the chain.
 
+In short:
+
+- **Input:** one or more project folders (or `--root` for a folder of
+  projects).
+- **Output:** one self-contained HTML file (`build`), or the same
+  model as text or JSON in the terminal (`summary`, `--json`).
+- **Effect on your projects:** none. GhostConsole is read-only; see
+  "Trust, in plain words" below.
+
 ## Install
+
+Requires Python 3.10 or newer. Zero dependencies: Python standard
+library only.
 
 ```sh
 pip install .
 ghostconsole --help
 ```
 
-Zero dependencies: Python standard library only.
+Without installing, run it from a source checkout as a module:
+
+```sh
+PYTHONPATH=src python3 -m ghostconsole --help
+```
+
+## Quick start
+
+```sh
+# 1. Build a board for one project (writes ghostconsole.html)
+ghostconsole build ~/work/app
+
+# 2. Open the board in any browser; it works fully offline
+# 3. Or read the same result in the terminal, without writing a file
+ghostconsole summary ~/work/app
+```
 
 ## Use
 
@@ -36,14 +63,30 @@ ghostconsole build --root ~/work -o board.html
 
 # Same model in the terminal, or as JSON for other tools
 ghostconsole summary ~/work/app
+ghostconsole summary ~/work/app --json
 ghostconsole build ~/work/app --json
+
+# A shared GhostApprove store, shown as its own extra board entry
+ghostconsole build ~/work/app --approve-store ~/work/.ghostapprove
 ```
 
-Options: `--stale-days N` (default 7) sets how old the newest evidence
-may be before a project counts as stale. `--approve-store <path>`
-points at a shared GhostApprove store instead of per-project ones.
-Without `-o`, the board is written to `ghostconsole.html` in the
-current directory.
+| Option | Applies to | Meaning |
+| --- | --- | --- |
+| `PROJECT ...` | both | Project directories to read reports from. May be combined with `--root`; duplicates are read once. |
+| `--root DIR` | both | Treat every immediate subdirectory of `DIR` as a project. Hidden directories are skipped. |
+| `-o`, `--output FILE` | `build` only | Board file to write (default: `ghostconsole.html` in the current directory). Ignored when `--json` is given: JSON goes to stdout and no board file is written. |
+| `--stale-days N` | both | How old (in days, default 7) the newest evidence may be before a project counts as stale. |
+| `--approve-store DIR` | both | A shared GhostApprove store directory, shown as its own card in addition to any per-project stores. |
+| `--json` | both | Print the board model as JSON to stdout instead of HTML or text. |
+| `--version` | top level | Print the version and exit. |
+
+Exit codes:
+
+- `0`: a board or summary was produced. Missing reports are content
+  ("no report found" rows), not errors, so an empty project still
+  exits `0`.
+- `2`: usage error: no projects given, `--root` or `--approve-store`
+  is not a directory, or the output file could not be written.
 
 ## The columns
 
@@ -66,6 +109,17 @@ it never moves the project into any column, good or bad. A project
 whose only reports are fixture material sits in Stale with the reason
 stated on the card. Live reports always win over fixture ones for
 the same tool.
+
+Rows for the history-backed tools (Slice, Verify, Bench) also carry
+a trend line when the tool's history file holds two or more readable
+entries: how many entries were recorded, and how the latest compares
+with the previous one (tokens saved for Slice, the verdict and how
+many past verdicts needed attention for Verify, failing-task counts
+for Bench, whose history records the count as `tasks_failed`). A
+trend is context, never a verdict: it is built only from fields the
+adapter already recognizes, and only the latest report places the
+project, so a recovered tool is Verified even when older history
+needed attention.
 
 A tool that has not reported shows a quiet "no report found" row
 (the Handoff, Logs, Deps, and Data rows name the artifact they look
@@ -91,7 +145,23 @@ and never fails the build.
 
 ## Which reports it reads
 
-Per project: Slice (`.ghostslice-history.jsonl`, newest bundle
+One row per tool, per project:
+
+| Row | Files looked for (per project) |
+| --- | --- |
+| Slice | `.ghostslice-history.jsonl`, else the newest bundle `manifest.json` |
+| Verify | `verify-report.json`, else `.ghostverify-history.jsonl` |
+| Bench | `bench-report.json`, else `.ghostbench-history.jsonl` |
+| Scope | Newest `scope.json` |
+| Ledger | `ledger-report.json`, else `.ghostledger.jsonl` |
+| Watch | Newest `watch-report.json` |
+| Approve | `.ghostapprove/` store (project root or nested), or `--approve-store` |
+| Handoff | Newest `handoff.json` |
+| Logs | A `manifest.json` with the GhostLogs shape, beside its `INCIDENT.md` |
+| Deps | Newest `deps-manifest.json` |
+| Data | A `manifest.json` with the GhostData shape, beside its `PROMPT.md` |
+
+In detail: Slice (`.ghostslice-history.jsonl`, newest bundle
 `manifest.json`), Verify (`.ghostverify-history.jsonl`,
 `verify-report.json`), Bench (`.ghostbench-history.jsonl`,
 `bench-report.json`), Scope (newest `scope.json`), Ledger
@@ -117,6 +187,33 @@ bounded (depth 4, `.git` / `node_modules` / virtualenvs / caches
 skipped, symlinks not followed, files over 5 MB not parsed), and the
 card names the exact file used, so a wrong pick is visible.
 
+## Troubleshooting
+
+- **A project I expected in Verified is in Stale.** The reason is
+  printed on its card ("Why here: ..."). The usual causes are: no
+  live reports were found, a Watch verdict of stale or unknown, or
+  the newest live evidence is older than `--stale-days` (default 7).
+  Widen the window with `--stale-days N` if the reports are simply
+  old but still the ones you trust.
+- **A project is in Attention and I do not see a failure.** Look for
+  a row labelled "unreadable": a report that exists but cannot be
+  parsed is an Attention row by design. It is never dropped, and the
+  row names the exact file, so you can open that file and fix or
+  regenerate it with the owning tool.
+- **A tool row says "no report found" but the tool did run.** The
+  search is bounded: depth 4, files over 5 MB are not parsed, and
+  `.git`, `node_modules`, virtualenvs, and caches are skipped (see
+  "Which reports it reads"). A report outside those bounds will not
+  be found. The card names the file that *was* used for each row.
+- **A report is shown but labelled "(fixture/example report)".**
+  It was found under a `tests/`, `fixtures/`, `examples/`, or similar
+  directory, so it is material the project ships, not live state.
+  Fixture rows never move a project into any column; run the owning
+  tool in the project itself to produce a live report.
+- **An mtime is shown instead of a run time.** That report format
+  carries no timestamp of its own. The board labels the file's
+  modification time as "mtime" and never presents it as a run time.
+
 ## Limits, stated plainly
 
 - Console reports what reports say. A tool that never ran leaves no
@@ -137,4 +234,6 @@ card names the exact file used, so a wrong pick is visible.
 ## Examples and licence
 
 `examples/` holds a four-project fixture report set (one per board
-state) and the board rendered from it. MIT.
+state) and the board rendered from it; see `examples/README.md` and
+`examples/run_demo.sh` to regenerate it. Licence: MIT (see
+`LICENSE`).
