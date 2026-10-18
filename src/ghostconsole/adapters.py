@@ -27,7 +27,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .model import ABSENT, ATTENTION, OK, STALE, UNREADABLE, Section
+from .model import (ABSENT, ATTENTION, LEVEL_RANK, OK, STALE, UNREADABLE,
+                    Section)
 
 MAX_DEPTH = 4
 MAX_VISITED = 20000
@@ -384,6 +385,52 @@ def _tag(section: Section, provenance: str) -> Section:
     return section
 
 
+# ------------------------------------------------- evidence contract
+# Reports written after the shared evidence contract carry
+# "verification_level", "tool_version", and sometimes their own
+# "provenance". These helpers read those fields exactly as written:
+# a level outside the contract enum is not a level, a version that
+# is not a string is not a version, and nothing is ever inferred
+# from other fields (a tier string is not a verification level).
+
+def _stated_level(obj: dict) -> str | None:
+    value = obj.get("verification_level")
+    if isinstance(value, str) and value.strip().lower() in LEVEL_RANK:
+        return value.strip().lower()
+    return None
+
+
+def _stated_version(obj: dict) -> str | None:
+    value = obj.get("tool_version")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _apply_evidence(section: Section, obj: dict) -> Section:
+    """Carry a report's stated evidence-contract fields onto its
+    section. Absent fields stay None: not stated, never invented."""
+    level = _stated_level(obj)
+    if level is not None:
+        section.verification_level = level
+    version = _stated_version(obj)
+    if version is not None:
+        section.tool_version = version
+    return section
+
+
+def _mark_sample(section: Section) -> Section:
+    """A report that declares provenance "sample" is sample
+    evidence wherever it sits on disk: shown, labelled, and (like
+    fixture material) never live state. The path-based label, when
+    the file also sits under a fixture path, is kept as well."""
+    section.provenance = "sample"
+    if section.state != ABSENT and \
+            "(sample report)" not in section.summary:
+        section.summary += " (sample report)"
+    return section
+
+
 # ---------------------------------------------------------------- Slice
 
 def slice_section(project: Path) -> Section:
@@ -533,6 +580,7 @@ def verify_section(project: Path) -> Section:
         when, kind = _when(report, obj.get("generated_at") or obj.get("at"))
         section = _tag(Section(tool, state, summary, _rel(report, project),
                                when, kind, reason), prov)
+        _apply_evidence(section, obj)
         section.trend = _verify_trend(
             _history_rows(project, ".ghostverify-history.jsonl"))
         return section
@@ -569,6 +617,7 @@ def verify_section(project: Path) -> Section:
                       if state == ATTENTION else "")
             section = Section(tool, state, summary, _rel(history, project),
                               when, kind, reason)
+            _apply_evidence(section, last)
             section.trend = _verify_trend(rows)
             return section
     return Section(tool)
@@ -596,12 +645,23 @@ def bench_section(project: Path) -> Section:
         summary = f"run {run}: {len(tasks)} task(s)"
         if failed:
             summary += f", {failed} failed"
+        version = _stated_version(obj)
+        if version is not None:
+            summary += f" (ghostbench {version})"
         when, kind = _when(report, obj.get("generated_at")
                            or obj.get("created_utc") or obj.get("at"))
         state = ATTENTION if failed else OK
         reason = f"Bench run {run}: {failed} failing task(s)" if failed else ""
         section = _tag(Section(tool, state, summary, _rel(report, project),
                                when, kind, reason), prov)
+        _apply_evidence(section, obj)
+        # The report's own word on provenance beats its path: a
+        # report declaring "sample" is sample evidence even at a
+        # live path, and must never place the project.
+        declared = obj.get("provenance")
+        if isinstance(declared, str) and \
+                declared.strip().lower() == "sample":
+            _mark_sample(section)
         section.trend = _bench_trend(
             _history_rows(project, ".ghostbench-history.jsonl"))
         return section
@@ -630,6 +690,7 @@ def bench_section(project: Path) -> Section:
                       if failed else "")
             section = Section(tool, state, summary, _rel(history, project),
                               when, kind, reason)
+            _apply_evidence(section, last)
             section.trend = _bench_trend(rows)
             return section
     return Section(tool)
@@ -717,8 +778,9 @@ def ledger_section(project: Path) -> Section:
         when, kind = _when(report, obj.get("generated_at") or obj.get("as_of"))
         state = ATTENTION if loops else OK
         reason = f"Ledger: {loops} loop warning(s)" if loops else ""
-        return Section(tool, state, summary, _rel(report, project),
-                       when, kind, reason)
+        section = Section(tool, state, summary, _rel(report, project),
+                          when, kind, reason)
+        return _apply_evidence(section, obj)
 
     ledger = project / ".ghostledger.jsonl"
     if ledger.is_file():
@@ -778,12 +840,14 @@ def watch_section(project: Path) -> Section:
     when, kind = _when(report, obj.get("generated_at")
                        or obj.get("checked_at") or obj.get("at"))
     if verdict == "fresh":
-        return _tag(Section(tool, OK, f"verdict: fresh{extra}",
-                            _rel(report, project), when, kind), prov)
+        section = _tag(Section(tool, OK, f"verdict: fresh{extra}",
+                               _rel(report, project), when, kind), prov)
+        return _apply_evidence(section, obj)
     state = STALE
-    return _tag(Section(tool, state, f"verdict: {verdict}{extra}",
-                        _rel(report, project), when, kind,
-                        reason=f"Watch verdict: {verdict}"), prov)
+    section = _tag(Section(tool, state, f"verdict: {verdict}{extra}",
+                           _rel(report, project), when, kind,
+                           reason=f"Watch verdict: {verdict}"), prov)
+    return _apply_evidence(section, obj)
 
 
 # ---------------------------------------------------------------- Approve

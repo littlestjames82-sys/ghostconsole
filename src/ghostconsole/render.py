@@ -11,7 +11,20 @@ import html
 import json
 from datetime import datetime, timezone
 
-from .model import COLUMNS, ProjectBoard
+from .model import COLUMNS, LEVEL_PLAIN, VERIFICATION_LEVELS, ProjectBoard
+
+# One plain-words line explaining the evidence levels, printed on
+# every board so a reader who never saw the evidence contract still
+# knows what a row's level means. A level is shown on a row only
+# when the report itself states one; unstated is never upgraded.
+LEVEL_LEGEND = (
+    "Verification levels: "
+    + "; ".join(f"{level} = {LEVEL_PLAIN[level]}"
+                for level in VERIFICATION_LEVELS[1:])
+    + ". A level appears on a row only when the report states one; "
+    "no stated level means the report did not say, not that the "
+    "check was weaker or stronger."
+)
 
 COLUMN_TITLES = {
     "verified": "Verified",
@@ -94,6 +107,7 @@ def render_html(model: dict) -> str:
         f"files only. {len(boards)} project(s). Stale window: "
         f"{esc(model['stale_days'])} day(s). Read-only: this board was "
         "built by reading reports, no tool was run.</p>",
+        f"<p>{esc(LEVEL_LEGEND)}</p>",
         "</header>",
         '<main class="board">',
     ]
@@ -115,6 +129,9 @@ def render_html(model: dict) -> str:
                     kind = f" ({section.time_kind})" if section.time_kind \
                         else ""
                     meta_bits.append(age_text(section.when, now) + kind)
+                if section.verification_level:
+                    meta_bits.append(
+                        f"level: {section.verification_level}")
                 if section.source:
                     meta_bits.append(section.source)
                 meta = " · ".join(meta_bits)
@@ -154,6 +171,7 @@ def render_text(model: dict) -> str:
     lines = [
         f"GhostConsole summary - generated {model['generated_at']} "
         f"(stale window {model['stale_days']} day(s))",
+        LEVEL_LEGEND,
     ]
     for column in COLUMNS:
         group = [b for b in boards if b.column == column]
@@ -166,10 +184,12 @@ def render_text(model: dict) -> str:
                 label = STATE_LABELS.get(section.state, section.state)
                 age = age_text(section.when, now)
                 age = f" ({age})" if age else ""
+                level = (f" | level: {section.verification_level}"
+                         if section.verification_level else "")
                 trend = f" | trend: {section.trend}" if section.trend \
                     else ""
                 lines.append(f"    [{label}] {section.tool}: "
-                             f"{section.summary}{age}{trend}")
+                             f"{section.summary}{age}{level}{trend}")
     return "\n".join(lines) + "\n"
 
 

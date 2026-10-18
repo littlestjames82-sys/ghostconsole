@@ -15,8 +15,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import adapters
-from .model import (ABSENT, ATTENTION, COL_ATTENTION, COL_STALE, STALE,
-                    UNREADABLE, VERIFIED, ProjectBoard, Section)
+from .model import (ABSENT, ATTENTION, COL_ATTENTION, COL_STALE,
+                    LEVEL_LIVE_AGENT, LEVEL_NONE, LEVEL_PLAIN, LEVEL_STATIC,
+                    LEVEL_TESTS, STALE, UNREADABLE, VERIFIED, ProjectBoard,
+                    Section, strongest_level)
 
 ADAPTERS = (
     adapters.slice_section,
@@ -70,13 +72,16 @@ def classify(board: ProjectBoard, now: datetime,
     evidence, otherwise Verified. The chosen ``column_reason`` is
     always set, so every card can print why it sits where it sits.
     """
-    # Only live sections place a project. Fixture/example sections are
-    # evidence about the project's shipped test material, not about
-    # the project, so they never drive a column in either direction.
+    # Only live sections place a project. Fixture/example and sample
+    # sections are evidence about material the project ships (or a
+    # report that declares itself a sample), not about the project's
+    # live state, so they never drive a column in either direction.
     present = [s for s in board.sections
                if s.state != ABSENT and s.provenance == "live"]
     fixture = [s for s in board.sections
                if s.state != ABSENT and s.provenance == "fixture"]
+    sample = [s for s in board.sections
+              if s.state != ABSENT and s.provenance == "sample"]
     for section in present:
         if section.state in (ATTENTION, UNREADABLE):
             board.column = COL_ATTENTION
@@ -91,10 +96,15 @@ def classify(board: ProjectBoard, now: datetime,
             return board
     if not present:
         board.column = COL_STALE
+        untrusted = []
         if fixture:
+            untrusted.append(f"{len(fixture)} fixture/example report(s)")
+        if sample:
+            untrusted.append(f"{len(sample)} sample report(s)")
+        if untrusted:
             board.column_reason = (
-                f"no live reports found ({len(fixture)} fixture/example "
-                f"report(s) on the card, labelled, not counted)")
+                "no live reports found (" + ", ".join(untrusted) +
+                " on the card, labelled, not counted)")
         else:
             board.column_reason = "no reports found"
         return board
@@ -106,9 +116,42 @@ def classify(board: ProjectBoard, now: datetime,
                                f"(stale window {stale_days} day(s))")
         return board
     board.column = VERIFIED
-    board.column_reason = ("latest reports ok and inside the "
-                           f"{stale_days} day stale window")
+    board.column_reason = _verified_reason(board, present, stale_days)
     return board
+
+
+def _verified_reason(board: ProjectBoard, present: list[Section],
+                     stale_days: int) -> str:
+    """Why a project sits in Verified, stated without overclaiming.
+
+    The reason always names the strongest verification level among
+    the project's LIVE sections (fixture/sample evidence never feeds
+    this), says plainly when that level is only static analysis, says
+    "not stated" when no live report states a level, and counts how
+    many of the board's tool rows have no live report at all, so a
+    Verified card built on one of eleven checks reads that way.
+    """
+    reason = ("latest reports ok and inside the "
+              f"{stale_days} day stale window")
+    strongest = strongest_level(present)
+    if strongest is None:
+        reason += "; verification level not stated by any live report"
+    elif strongest == LEVEL_STATIC:
+        reason += ("; strongest verification level: static-analysis "
+                   "(static only: no tests executed, no live run)")
+    elif strongest == LEVEL_TESTS:
+        reason += ("; strongest verification level: tests-executed "
+                   f"({LEVEL_PLAIN[LEVEL_TESTS]})")
+    elif strongest == LEVEL_LIVE_AGENT:
+        reason += ("; strongest verification level: live-agent "
+                   f"({LEVEL_PLAIN[LEVEL_LIVE_AGENT]})")
+    else:  # LEVEL_NONE stated, and nothing stronger
+        reason += ("; strongest verification level: none "
+                   f"({LEVEL_PLAIN[LEVEL_NONE]})")
+    missing = len(board.sections) - len(present)
+    reason += (f"; {missing} of {len(board.sections)} checks missing "
+               f"(no live report)")
+    return reason
 
 
 def collect(projects: list[Path], stale_days: int = 7,

@@ -24,6 +24,48 @@ COL_STALE = "stale"
 
 COLUMNS = (VERIFIED, COL_ATTENTION, COL_STALE)
 
+# Verification levels (shared evidence contract, EVIDENCE_CONTRACT
+# DRAFT v0.1): how strong a report's evidence is, weakest first.
+# A level is only ever shown when the report itself states one;
+# absence means "not stated", never a guessed level.
+LEVEL_NONE = "none"
+LEVEL_STATIC = "static-analysis"
+LEVEL_TESTS = "tests-executed"
+LEVEL_LIVE_AGENT = "live-agent"
+
+VERIFICATION_LEVELS = (LEVEL_NONE, LEVEL_STATIC, LEVEL_TESTS,
+                       LEVEL_LIVE_AGENT)
+LEVEL_RANK = {level: rank for rank, level in enumerate(VERIFICATION_LEVELS)}
+
+# Plain words for one line of board legend, so a reader who never
+# saw the contract still understands the levels.
+LEVEL_PLAIN = {
+    LEVEL_NONE: "no usable evidence",
+    LEVEL_STATIC: "static analysis only (no code executed, no agent ran)",
+    LEVEL_TESTS: "the project's own tests were actually run",
+    LEVEL_LIVE_AGENT: "a real agent attempted the real task",
+}
+
+# Provenance values a section can carry. "live" is the project's own
+# state; "fixture" and "sample" are shipped material: shown and
+# labelled, but they never place a project or feed its freshness
+# clock.
+NON_LIVE_PROVENANCE = ("fixture", "sample")
+
+
+def strongest_level(sections) -> str | None:
+    """Strongest stated verification level among sections, or None.
+
+    Only levels from the contract enum count; an unrecognized value
+    is not a level and never wins. Returns None when no section
+    states a level at all.
+    """
+    stated = [s.verification_level for s in sections
+              if s.verification_level in LEVEL_RANK]
+    if not stated:
+        return None
+    return max(stated, key=LEVEL_RANK.__getitem__)
+
 
 @dataclass
 class Section:
@@ -43,10 +85,17 @@ class Section:
     trend: str = ""
     # "live": a report the project itself produced in normal use.
     # "fixture": a report shipped inside the project as test/example
-    # material (under tests/, fixtures/, examples/, ...). Fixture
-    # sections are shown on the card, labelled, but never drive the
-    # project's column: they are not the project's live state.
+    # material (under tests/, fixtures/, examples/, ...). "sample": a
+    # report that declares itself a sample (its own provenance field
+    # says so), wherever it sits on disk. Fixture and sample sections
+    # are shown on the card, labelled, but never drive the project's
+    # column: they are not the project's live state.
     provenance: str = "live"
+    # Evidence-contract fields, carried only when the report itself
+    # states them. None means the report did not say; renderers show
+    # a stated level and never invent one for an unstated report.
+    verification_level: str | None = None
+    tool_version: str | None = None
 
     def to_dict(self) -> dict:
         """Plain-dict form used by the JSON renderer."""
@@ -60,6 +109,8 @@ class Section:
             "reason": self.reason,
             "trend": self.trend,
             "provenance": self.provenance,
+            "verification_level": self.verification_level,
+            "tool_version": self.tool_version,
         }
 
 
