@@ -24,6 +24,7 @@ ADAPTERS = (
     adapters.slice_section,
     adapters.verify_section,
     adapters.bench_section,
+    adapters.workflow_section,
     adapters.scope_section,
     adapters.ledger_section,
     adapters.watch_section,

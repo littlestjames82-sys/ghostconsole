@@ -171,6 +171,46 @@ def bench_report(project: Path, failed=BENCH_TASKS_FAILED):
     })
 
 
+def workflow_report(project: Path, verdict="ok",
+                    at="2026-10-14T08:10:00+00:00"):
+    """One GhostWorkflow run: report + the board it rendered, under
+    .ghostworkflow/<run-id>/, in the writer's documented shape."""
+    run_id = "wf-20261014T081000Z-fixture"
+    step = {"argv": [], "exit_code": 0, "started_utc": at,
+            "finished_utc": at, "duration_s": 0.1, "reports": [],
+            "detail": ""}
+    steps = [
+        dict(step, name="slice", status="ok", verdict="exported",
+             verification_level="static-analysis"),
+        dict(step, name="verify", status="ok", verdict="sufficient",
+             verification_level="static-analysis"),
+        dict(step, name="bench", status="ok", verdict="tasks_passed",
+             verification_level="tests-executed"),
+        dict(step, name="console", status="ok", verdict="rendered",
+             verification_level="none"),
+    ]
+    engine = {"found": True, "version": "0.1.0", "how": "checkout",
+              "home": "/fixture"}
+    path = write_json(project / ".ghostworkflow" / run_id /
+                      "workflow-report.json", {
+        "project": {"name": project.name, "path": str(project)},
+        "task": "fixture task", "commit": None,
+        "tree_hash": "sha256:" + "0" * 64,
+        "tree_hash_source": "fixture",
+        "tool": "ghostworkflow", "tool_version": "0.1.0",
+        "engines": {"ghostslice": dict(engine, version="1.0.6"),
+                    "ghostverify": engine, "ghostbench": engine,
+                    "ghostconsole": engine},
+        "timestamp": at, "run_id": run_id, "verdict": verdict,
+        "verification_level": "tests-executed", "provenance": "live",
+        "steps": steps,
+    })
+    (path.parent / "board.html").write_text(
+        "<!DOCTYPE html><title>fixture run board</title>\n",
+        encoding="utf-8")
+    return path
+
+
 def scope_pack(project: Path):
     return write_json(project / "pack" / "scope.json", {
         "base": "HEAD~1", "head": "HEAD",
@@ -228,6 +268,7 @@ def healthy_project(base: Path, name="healthy") -> Path:
     verify_report(p)
     bench_history(p, failed=0)
     bench_report(p, failed=0)
+    workflow_report(p)
     scope_pack(p)
     ledger_report(p, loop_warnings=0)
     watch_report(p, verdict="fresh")

@@ -696,6 +696,124 @@ def bench_section(project: Path) -> Section:
     return Section(tool)
 
 
+# ---------------------------------------------------------------- Workflow
+
+# GhostWorkflow (evidence.py): run verdicts "ok" / "attention" /
+# "failed". A failed run is parseable evidence that a step failed, so
+# it maps to ATTENTION, exactly as GhostVerify's "failed" patch
+# verdict does; there is no separate error state on the board.
+# "error" is honoured defensively for the same outcome.
+_WORKFLOW_OK_WORDS = frozenset({"ok"})
+_WORKFLOW_ATTENTION_WORDS = frozenset({"attention", "failed", "error"})
+
+
+def _workflow_state(verdict) -> str | None:
+    """GhostWorkflow run verdicts."""
+    return _exact_state(verdict, _WORKFLOW_OK_WORDS,
+                        _WORKFLOW_ATTENTION_WORDS)
+
+
+def _is_workflow_report(obj) -> bool:
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("tool") == "ghostworkflow":
+        return True
+    return "verdict" in obj and isinstance(obj.get("steps"), list)
+
+
+def _workflow_candidates(project: Path) -> list[Path]:
+    """Run reports at .ghostworkflow/<run-id>/workflow-report.json,
+    newest first.
+
+    GhostWorkflow writes exactly one layout: a run directory under
+    the project's .ghostworkflow/ holding workflow-report.json (and
+    the board.html the run rendered beside it). Discovery is scoped
+    to that layout rather than the name-anywhere search the older
+    adapters use: a same-named file elsewhere was not written by a
+    workflow run. The directory is never a fixture segment, so these
+    reports are live by path, as _provenance would also find.
+    """
+    found = []
+    for cand in find_candidates(project, "workflow-report.json"):
+        try:
+            parts = cand.relative_to(Path(project)).parts
+        except ValueError:
+            continue
+        if len(parts) == 3 and parts[0] == ".ghostworkflow":
+            found.append(cand)
+    return found
+
+
+def workflow_section(project: Path) -> Section:
+    """GhostWorkflow row: newest run report under .ghostworkflow/."""
+    tool = "GhostWorkflow"
+    report = obj = corrupt = corrupt_err = None
+    for cand in _workflow_candidates(project):
+        parsed, err = _read_json(cand)
+        if err is not None:
+            if corrupt is None:
+                corrupt, corrupt_err = cand, err
+            continue
+        if not isinstance(parsed, dict):
+            if corrupt is None:
+                corrupt, corrupt_err = cand, "not a JSON object"
+            continue
+        if _is_workflow_report(parsed):
+            report, obj = cand, parsed
+            break
+    if report is None and corrupt is not None:
+        return Section(tool, UNREADABLE,
+                       f"report found but unreadable ({corrupt_err})",
+                       _rel(corrupt, project),
+                       reason="Workflow report unreadable")
+    if report is None:
+        return Section(tool)
+    verdict = obj.get("verdict")
+    state = _workflow_state(verdict)
+    run = obj.get("run_id", "unknown run")
+    if isinstance(verdict, str) and verdict.strip():
+        summary = f"run {run}: verdict {verdict.strip()}"
+    else:
+        summary = f"run {run}: no verdict recorded"
+    steps = obj.get("steps")
+    if isinstance(steps, list):
+        outcomes = []
+        for step in steps:
+            if isinstance(step, dict) and \
+                    isinstance(step.get("name"), str) and \
+                    isinstance(step.get("status"), str):
+                outcomes.append(f"{step['name']} {step['status']}")
+        if outcomes:
+            summary += "; steps: " + ", ".join(outcomes)
+    tree_hash = obj.get("tree_hash")
+    if isinstance(tree_hash, str) and tree_hash.strip():
+        summary += f"; tree_hash {tree_hash.strip()}"
+    version = _stated_version(obj)
+    if version is not None:
+        summary += f" (ghostworkflow {version})"
+    if state is None:
+        state = OK
+        summary += " (verdict wording not recognized)"
+    reason = f"Workflow verdict: {verdict}" if state == ATTENTION else ""
+    when, kind = _when(report, obj.get("timestamp")
+                       or obj.get("generated_at") or obj.get("at"))
+    # The row's artifact is the board the run rendered beside its
+    # report: that is the file a reader opens from this row. When no
+    # board sits beside the report, the row names the report itself,
+    # as every other adapter does. (Rows carry a project-relative
+    # source path; the board renders sources as text, like all rows.)
+    board_html = report.parent / "board.html"
+    source = _rel(board_html if board_html.is_file() else report,
+                  project)
+    section = Section(tool, state, summary, source, when, kind, reason)
+    # The report's own contract fields (level, tool_version) are
+    # carried exactly as stated. Its "provenance" field is not read:
+    # ghostworkflow's schema fixes it to "live", and a workflow
+    # report is never treated as sample evidence.
+    _apply_evidence(section, obj)
+    return section
+
+
 # ---------------------------------------------------------------- Scope
 
 def scope_section(project: Path) -> Section:

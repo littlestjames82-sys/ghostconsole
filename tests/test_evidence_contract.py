@@ -69,8 +69,8 @@ def test_static_only_verified_reason_says_static_and_counts_missing(
     assert "static-analysis" in reason
     assert "static only" in reason
     assert "no tests executed, no live run" in reason
-    # Only Bench of the board's 11 tool rows has a live report.
-    assert "10 of 11 checks missing" in reason
+    # Only Bench of the board's 12 tool rows has a live report.
+    assert "11 of 12 checks missing" in reason
     bench = _section(board, "GhostBench")
     assert bench["provenance"] == "live"
     assert bench["verification_level"] == "static-analysis"
@@ -90,7 +90,7 @@ def test_tests_executed_level_named_in_verified_reason(cli, tmp_path):
     reason = board["column_reason"]
     assert "tests-executed" in reason
     assert "static only" not in reason
-    assert "10 of 11 checks missing" in reason
+    assert "11 of 12 checks missing" in reason
     assert _section(board, "GhostBench")["verification_level"] == \
         "tests-executed"
 
@@ -172,7 +172,7 @@ def test_strongest_level_wins_across_live_sections(cli, tmp_path):
     assert board["column"] == "verified"
     assert "live-agent" in board["column_reason"]
     assert "static only" not in board["column_reason"]
-    assert "9 of 11 checks missing" in board["column_reason"]
+    assert "10 of 12 checks missing" in board["column_reason"]
 
 
 def test_fixture_level_never_feeds_strongest(cli, tmp_path):

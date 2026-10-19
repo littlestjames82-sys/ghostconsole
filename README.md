@@ -152,6 +152,7 @@ One row per tool, per project:
 | Slice | `.ghostslice-history.jsonl`, else the newest bundle `manifest.json` |
 | Verify | `verify-report.json`, else `.ghostverify-history.jsonl` |
 | Bench | `bench-report.json`, else `.ghostbench-history.jsonl` |
+| Workflow | Newest `.ghostworkflow/<run-id>/workflow-report.json` |
 | Scope | Newest `scope.json` |
 | Ledger | `ledger-report.json`, else `.ghostledger.jsonl` |
 | Watch | Newest `watch-report.json` |
@@ -164,7 +165,11 @@ One row per tool, per project:
 In detail: Slice (`.ghostslice-history.jsonl`, newest bundle
 `manifest.json`), Verify (`.ghostverify-history.jsonl`,
 `verify-report.json`), Bench (`.ghostbench-history.jsonl`,
-`bench-report.json`), Scope (newest `scope.json`), Ledger
+`bench-report.json`), Workflow (newest
+`.ghostworkflow/<run-id>/workflow-report.json`: the run's verdict,
+its per-step outcomes, and its tree hash when it states one; the row
+names the `board.html` the run rendered beside its report), Scope
+(newest `scope.json`), Ledger
 (`ledger-report.json`, else `.ghostledger.jsonl`), Watch (newest
 `watch-report.json`), Approve (`.ghostapprove/` store, root or
 nested), Handoff (newest `handoff.json`: session state, open loop and
