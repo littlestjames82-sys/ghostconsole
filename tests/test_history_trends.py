@@ -10,11 +10,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conftest import combined, run_cli, write_json, write_jsonl
+from conftest import fixture_iso, combined, run_cli, write_json, write_jsonl
 
-T1 = "2026-10-29T08:00:00+00:00"
-T2 = "2026-10-30T08:00:00+00:00"
-T3 = "2026-10-31T08:00:00+00:00"
+T1 = fixture_iso(0, days=-2)
+T2 = fixture_iso(0, days=-1)
+T3 = fixture_iso(0)
 
 
 def _board(cli, project: Path) -> dict:

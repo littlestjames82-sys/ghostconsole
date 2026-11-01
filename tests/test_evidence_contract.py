@@ -27,9 +27,9 @@ import json
 from pathlib import Path
 
 import conftest
-from conftest import combined, run_cli, write_json, write_jsonl
+from conftest import fixture_iso, combined, run_cli, write_json, write_jsonl
 
-AT = "2026-10-31T08:10:00Z"
+AT = fixture_iso(10).replace("+00:00", "Z")
 
 
 def _board(cli, project: Path) -> dict:
@@ -181,7 +181,7 @@ def test_fixture_level_never_feeds_strongest(cli, tmp_path):
     _bench_report(p, provenance="live")  # live, no level stated
     write_json(p / "examples" / "watch-report.json", {
         "tool": "ghostwatch", "verdict": "fresh",
-        "checked_at": "2026-10-31T08:20:00+00:00",
+        "checked_at": fixture_iso(20),
         "verification_level": "live-agent", "findings": {}})
     board = _board(cli, p)
     watch = _section(board, "GhostWatch")
@@ -196,7 +196,7 @@ def test_bench_history_line_level_is_carried(cli, tmp_path):
     p = tmp_path / "benchhist"
     p.mkdir()
     write_jsonl(p / ".ghostbench-history.jsonl", [{
-        "at": "2026-10-31T08:10:00+00:00", "tool": "ghostbench",
+        "at": fixture_iso(10), "tool": "ghostbench",
         "run_id": "hist-run", "tasks_total": 2, "tasks_failed": 0,
         "verification_level": "tests-executed"}])
     board = _board(cli, p)

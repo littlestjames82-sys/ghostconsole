@@ -14,9 +14,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conftest import combined, run_cli, write_json, write_jsonl
+from conftest import (combined, fixture_iso, run_cli,
+                      write_json, write_jsonl)
 
-NOW = "2026-10-31T08:05:00+00:00"
+NOW = fixture_iso(5)
 OLD = "2020-01-01T00:00:00+00:00"
 
 

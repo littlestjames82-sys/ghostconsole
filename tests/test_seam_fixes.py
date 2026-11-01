@@ -23,9 +23,9 @@ import time
 from pathlib import Path
 
 import conftest
-from conftest import combined, run_cli, write_json, write_jsonl
+from conftest import fixture_iso, combined, run_cli, write_json, write_jsonl
 
-NOW = "2026-10-31T08:40:00+00:00"
+NOW = fixture_iso(40)
 
 
 def _board(cli, project: Path) -> dict:

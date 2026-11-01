@@ -24,6 +24,22 @@ from pathlib import Path
 
 import pytest
 
+from datetime import datetime, timedelta, timezone
+
+_FIXTURE_BASE = datetime.now(timezone.utc).replace(
+    minute=0, second=0, microsecond=0)
+
+
+def fixture_iso(minutes=0, days=0):
+    """Clock-relative fixture stamps (Cycle 2 I3): the
+    board's stale window is measured against wall-clock
+    now, so pinned calendar dates rot (they did, twice);
+    these are computed from today and never do. The
+    minute/day offsets preserve the fixtures' original
+    relative spacing."""
+    t = _FIXTURE_BASE + timedelta(days=days, minutes=minutes)
+    return t.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
 REPO = Path(__file__).resolve().parents[1]
 
 # Distinctive fixture numbers. Tests assert these exact figures reach
@@ -99,7 +115,7 @@ def write_jsonl(path: Path, rows) -> Path:
     return path
 
 
-def slice_history(project: Path, at="2026-10-31T08:00:00+00:00"):
+def slice_history(project: Path, at=fixture_iso(0)):
     return write_jsonl(project / ".ghostslice-history.jsonl", [{
         "at": at, "kind": "export", "bundle": ".claude_context",
         "before_tokens": SLICE_BEFORE, "after_tokens": SLICE_AFTER,
@@ -110,7 +126,7 @@ def slice_history(project: Path, at="2026-10-31T08:00:00+00:00"):
 def slice_manifest(project: Path):
     return write_json(project / "bundle" / "manifest.json", {
         "tool": "ghostslice", "version": "1.0.6",
-        "generated_at": "2026-10-31T08:00:00+00:00",
+        "generated_at": fixture_iso(0),
         "root": str(project), "token_method": "ghostslice-estimator-v2",
         "files": [{"path": "src/app.py", "mode": "full",
                    "original_tokens": SLICE_BEFORE,
@@ -122,7 +138,7 @@ def slice_manifest(project: Path):
 
 
 def verify_history(project: Path, verdict="sufficient", hard_gaps=0,
-                   at="2026-10-31T08:05:00+00:00"):
+                   at=fixture_iso(5)):
     return write_jsonl(project / ".ghostverify-history.jsonl", [{
         "at": at, "tool": "ghostverify", "task": "fixture task",
         "bundle": "bundle", "bundle_manifest_sha256": "0" * 64,
@@ -144,7 +160,7 @@ def verify_report(project: Path, verdict="sufficient", hard_gaps=0):
     })
 
 
-def bench_history(project: Path, at="2026-10-31T08:10:00+00:00",
+def bench_history(project: Path, at=fixture_iso(10),
                   failed=BENCH_TASKS_FAILED):
     return write_jsonl(project / ".ghostbench-history.jsonl", [{
         "at": at, "tool": "ghostbench", "run_id": "fixture-run-1",
@@ -163,7 +179,7 @@ def bench_report(project: Path, failed=BENCH_TASKS_FAILED):
                       "status": "failed" if is_failed else "passed"})
     return write_json(project / "runs" / "bench-report.json", {
         "tool": "ghostbench", "version": "0.1.0",
-        "run_id": "fixture-run-1", "created_utc": "2026-10-31T08:10:00Z",
+        "run_id": "fixture-run-1", "created_utc": fixture_iso(10).replace("+00:00", "Z"),
         "tier": "A (static, no model, no spend)",
         "tasks": tasks,
         "failures_visible": [{"project": "fixture", "task": "task-1",
@@ -172,7 +188,7 @@ def bench_report(project: Path, failed=BENCH_TASKS_FAILED):
 
 
 def workflow_report(project: Path, verdict="ok",
-                    at="2026-10-31T08:10:00+00:00"):
+                    at=fixture_iso(10)):
     """One GhostWorkflow run: report + the board it rendered, under
     .ghostworkflow/<run-id>/, in the writer's documented shape."""
     run_id = "wf-20261014T081000Z-fixture"
@@ -228,7 +244,7 @@ def ledger_report(project: Path, loop_warnings=0):
                 for _ in range(loop_warnings)]
     return write_json(project / "ledger-report.json", {
         "tool": "ghostledger", "version": "0.1.0",
-        "generated_at": "2026-10-31T08:15:00+00:00",
+        "generated_at": fixture_iso(15),
         "entries": 9, "loop_warnings": warnings,
         "totals": {"estimated_cost": 1.25, "actual_cost": 1.31},
     })
@@ -237,7 +253,7 @@ def ledger_report(project: Path, loop_warnings=0):
 def watch_report(project: Path, verdict="fresh"):
     return write_json(project / "watch" / "watch-report.json", {
         "tool": "ghostwatch", "version": "0.1.0",
-        "checked_at": "2026-10-31T08:20:00+00:00",
+        "checked_at": fixture_iso(20),
         "bundle": "bundle", "verdict": verdict,
         "findings": {"missing_bundle_file": [], "stale_symbols": []},
     })
@@ -250,10 +266,10 @@ def approve_store(project: Path, total=APPROVE_REQUESTS,
         write_json(store / "requests" / f"req-{i + 1}.json", {
             "id": f"req-{i + 1}", "kind": "shell",
             "summary": f"fixture request {i + 1}",
-            "requested_at": "2026-10-31T08:25:00+00:00",
+            "requested_at": fixture_iso(25),
         })
     rows = [{"id": f"req-{i + 1}", "decision": "approved",
-             "at": "2026-10-31T08:30:00+00:00"} for i in range(decided)]
+             "at": fixture_iso(30)} for i in range(decided)]
     write_jsonl(store / "ledger.jsonl", rows)
     return store
 
