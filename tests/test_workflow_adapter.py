@@ -15,7 +15,7 @@ from pathlib import Path
 
 from conftest import combined, run_cli, verify_report, write_json
 
-AT = "2026-10-14T08:10:00Z"
+AT = "2026-10-31T08:10:00Z"
 TREE = "sha256:" + "ab" * 32
 RUN = "wf-20261014T081000Z-abc123"
 
@@ -107,9 +107,9 @@ def test_newest_run_wins_when_several(cli, tmp_path):
     p = tmp_path / "multi"
     p.mkdir()
     old = _workflow_report(p, run_id="wf-old", verdict="attention",
-                           timestamp="2026-10-14T07:00:00Z")
+                           timestamp="2026-10-31T07:00:00Z")
     new = _workflow_report(p, run_id="wf-new", verdict="ok",
-                           timestamp="2026-10-14T09:00:00Z")
+                           timestamp="2026-10-31T09:00:00Z")
     # Discovery order is newest file first, as with every adapter;
     # pin the mtimes so the newer run is unambiguously newer.
     base = 1_760_000_000
@@ -242,7 +242,7 @@ def test_steps_version_and_tree_hash_are_on_the_row(cli, tmp_path):
     assert "bench ok" in section["summary"]
     assert "(ghostworkflow 0.1.0)" in section["summary"]
     assert TREE in section["summary"]
-    assert section["when"].startswith("2026-10-14T08:10:00")
+    assert section["when"].startswith("2026-10-31T08:10:00")
     assert section["time_kind"] == "reported"
 
 

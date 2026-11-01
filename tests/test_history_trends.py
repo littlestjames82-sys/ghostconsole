@@ -12,9 +12,9 @@ from pathlib import Path
 
 from conftest import combined, run_cli, write_json, write_jsonl
 
-T1 = "2026-10-12T08:00:00+00:00"
-T2 = "2026-10-13T08:00:00+00:00"
-T3 = "2026-10-14T08:00:00+00:00"
+T1 = "2026-10-29T08:00:00+00:00"
+T2 = "2026-10-30T08:00:00+00:00"
+T3 = "2026-10-31T08:00:00+00:00"
 
 
 def _board(cli, project: Path) -> dict:

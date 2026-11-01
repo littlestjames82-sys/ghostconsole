@@ -25,7 +25,7 @@ from pathlib import Path
 import conftest
 from conftest import combined, run_cli, write_json, write_jsonl
 
-NOW = "2026-10-14T08:40:00+00:00"
+NOW = "2026-10-31T08:40:00+00:00"
 
 
 def _board(cli, project: Path) -> dict:
